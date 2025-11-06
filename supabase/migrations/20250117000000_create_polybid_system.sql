@@ -248,6 +248,13 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Drop existing triggers if they exist
+DROP TRIGGER IF EXISTS update_vendor_profiles_updated_at ON public.vendor_profiles;
+DROP TRIGGER IF EXISTS update_vendor_applications_updated_at ON public.vendor_applications;
+DROP TRIGGER IF EXISTS update_bids_updated_at ON public.bids;
+DROP TRIGGER IF EXISTS update_order_assignments_updated_at ON public.order_assignments;
+
+-- Create triggers
 CREATE TRIGGER update_vendor_profiles_updated_at 
   BEFORE UPDATE ON public.vendor_profiles 
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -284,6 +291,9 @@ BEGIN
   RETURN NEW;
 END;
 $$ language 'plpgsql';
+
+-- Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS update_vendor_rating_trigger ON public.vendor_reviews;
 
 CREATE TRIGGER update_vendor_rating_trigger
   AFTER INSERT ON public.vendor_reviews
