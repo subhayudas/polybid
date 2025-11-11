@@ -63,3 +63,4 @@ COMMENT ON TABLE public.vendor_profiles IS 'Verified vendor profiles. One profil
 
 
 
+

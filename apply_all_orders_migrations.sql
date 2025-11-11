@@ -385,3 +385,4 @@ SELECT
    WHERE event_object_schema = 'public' AND event_object_table = 'orders') as total_triggers;
 
 
+

@@ -149,3 +149,4 @@ const fetchData = async () => {
 6. **Mobile First**: Design for mobile, then enhance for larger screens
 
 
+

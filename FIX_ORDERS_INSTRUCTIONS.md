@@ -129,3 +129,4 @@ If you continue to experience issues:
 The policy `"Authenticated users can view all orders"` allows any logged-in user to see all orders. This is intentional for your marketplace/bidding system. If you want to restrict this in the future, you can modify this policy to be more selective (e.g., only vendors or only approved vendors).
 
 
+

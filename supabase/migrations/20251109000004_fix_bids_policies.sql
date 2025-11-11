@@ -79,3 +79,4 @@ COMMENT ON POLICY "Users can create their own bids" ON public.bids IS
   'Allows authenticated users to submit bids on orders';
 
 
+

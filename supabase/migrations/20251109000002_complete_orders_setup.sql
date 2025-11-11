@@ -261,3 +261,4 @@ COMMENT ON POLICY "Authenticated users can view all orders" ON public.orders IS
   'Allows all authenticated users to view orders so vendors can see available orders for bidding. This is a marketplace feature.';
 
 
+
