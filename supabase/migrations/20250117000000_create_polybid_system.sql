@@ -141,6 +141,11 @@ CREATE POLICY "Admins can manage all vendor profiles" ON public.vendor_profiles
       SELECT 1 FROM public.user_roles 
       WHERE user_id = auth.uid() AND role = 'admin'
     )
+  ) WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.user_roles 
+      WHERE user_id = auth.uid() AND role = 'admin'
+    )
   );
 
 -- RLS Policies for vendor_applications
@@ -155,6 +160,11 @@ CREATE POLICY "Users can update their pending applications" ON public.vendor_app
 
 CREATE POLICY "Admins can manage all applications" ON public.vendor_applications
   FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM public.user_roles 
+      WHERE user_id = auth.uid() AND role = 'admin'
+    )
+  ) WITH CHECK (
     EXISTS (
       SELECT 1 FROM public.user_roles 
       WHERE user_id = auth.uid() AND role = 'admin'
@@ -212,6 +222,11 @@ CREATE POLICY "Admins can manage all assignments" ON public.order_assignments
       SELECT 1 FROM public.user_roles 
       WHERE user_id = auth.uid() AND role = 'admin'
     )
+  ) WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.user_roles 
+      WHERE user_id = auth.uid() AND role = 'admin'
+    )
   );
 
 -- RLS Policies for bid_notifications
@@ -233,6 +248,11 @@ CREATE POLICY "Order customers can create reviews" ON public.vendor_reviews
 
 CREATE POLICY "Admins can manage all reviews" ON public.vendor_reviews
   FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM public.user_roles 
+      WHERE user_id = auth.uid() AND role = 'admin'
+    )
+  ) WITH CHECK (
     EXISTS (
       SELECT 1 FROM public.user_roles 
       WHERE user_id = auth.uid() AND role = 'admin'
@@ -309,6 +329,166 @@ BEGIN
     AND expires_at < NOW();
 END;
 $$ language 'plpgsql';
+
+-- Function to create vendor profile when application is approved
+CREATE OR REPLACE FUNCTION public.handle_vendor_application_approval()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Only process when status changes to 'approved'
+  IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
+    -- Create or update vendor profile
+    INSERT INTO public.vendor_profiles (
+      id,
+      company_name,
+      business_email,
+      phone,
+      address,
+      business_license,
+      tax_id,
+      capabilities,
+      materials_offered,
+      certifications,
+      is_verified,
+      is_active
+    )
+    VALUES (
+      NEW.user_id,
+      NEW.company_name,
+      NEW.business_email,
+      NEW.phone,
+      NEW.address,
+      NEW.business_license,
+      NEW.tax_id,
+      NEW.capabilities,
+      NEW.materials_offered,
+      NEW.certifications,
+      true, -- is_verified
+      true  -- is_active
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      company_name = EXCLUDED.company_name,
+      business_email = EXCLUDED.business_email,
+      phone = EXCLUDED.phone,
+      address = EXCLUDED.address,
+      business_license = EXCLUDED.business_license,
+      tax_id = EXCLUDED.tax_id,
+      capabilities = EXCLUDED.capabilities,
+      materials_offered = EXCLUDED.materials_offered,
+      certifications = EXCLUDED.certifications,
+      is_verified = true,
+      is_active = true,
+      updated_at = NOW();
+
+    -- Create notification for vendor
+    INSERT INTO public.bid_notifications (
+      recipient_id,
+      type,
+      title,
+      message,
+      related_order_id
+    )
+    VALUES (
+      NEW.user_id,
+      'application_approved',
+      'Vendor Application Approved',
+      'Congratulations! Your vendor application for ' || NEW.company_name || ' has been approved. You can now start bidding on orders.',
+      NULL
+    );
+  END IF;
+
+  -- Handle rejection
+  IF NEW.status = 'rejected' AND (OLD.status IS NULL OR OLD.status != 'rejected') THEN
+    -- Create notification for vendor
+    INSERT INTO public.bid_notifications (
+      recipient_id,
+      type,
+      title,
+      message,
+      related_order_id
+    )
+    VALUES (
+      NEW.user_id,
+      'application_rejected',
+      'Vendor Application Rejected',
+      'Your vendor application for ' || NEW.company_name || ' has been rejected.' || 
+      CASE WHEN NEW.review_notes IS NOT NULL THEN ' Reason: ' || NEW.review_notes ELSE '' END,
+      NULL
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Trigger to handle application approval
+DROP TRIGGER IF EXISTS handle_vendor_application_approval_trigger ON public.vendor_applications;
+
+CREATE TRIGGER handle_vendor_application_approval_trigger
+  AFTER UPDATE OF status ON public.vendor_applications
+  FOR EACH ROW
+  WHEN (NEW.status != OLD.status)
+  EXECUTE FUNCTION public.handle_vendor_application_approval();
+
+-- Helper function to get admin users bypassing RLS
+CREATE OR REPLACE FUNCTION public.get_admin_users()
+RETURNS TABLE(user_id UUID)
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  -- This function runs with SECURITY DEFINER, so it bypasses RLS
+  -- when querying user_roles
+  RETURN QUERY
+  SELECT ur.user_id
+  FROM public.user_roles ur
+  WHERE ur.role = 'admin';
+END;
+$$ language 'plpgsql';
+
+-- Function to notify admins when new application is submitted
+CREATE OR REPLACE FUNCTION public.notify_admins_new_application()
+RETURNS TRIGGER 
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  admin_user RECORD;
+BEGIN
+  -- Use the helper function to get admin users, which bypasses RLS
+  FOR admin_user IN 
+    SELECT * FROM public.get_admin_users()
+  LOOP
+    INSERT INTO public.bid_notifications (
+      recipient_id,
+      type,
+      title,
+      message,
+      related_order_id
+    )
+    VALUES (
+      admin_user.user_id,
+      'new_vendor_application',
+      'New Vendor Application',
+      'A new vendor application has been submitted by ' || NEW.company_name || ' (' || NEW.business_email || ').',
+      NULL
+    );
+  END LOOP;
+
+  RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- If user_roles table doesn't exist or has issues, just return without error
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Trigger to notify admins on new application
+DROP TRIGGER IF EXISTS notify_admins_new_application_trigger ON public.vendor_applications;
+
+CREATE TRIGGER notify_admins_new_application_trigger
+  AFTER INSERT ON public.vendor_applications
+  FOR EACH ROW
+  EXECUTE FUNCTION public.notify_admins_new_application();
 
 -- Add comments for documentation
 COMMENT ON TABLE public.vendor_profiles IS 'Verified vendor profiles with capabilities and ratings';
